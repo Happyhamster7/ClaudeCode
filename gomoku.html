@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gomoku</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #1a1a2e;
+    color: #eee;
+    font-family: 'Segoe UI', sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 20px;
+  }
+
+  h1 {
+    font-size: 2rem;
+    margin-bottom: 10px;
+    letter-spacing: 4px;
+    color: #e2c97e;
+  }
+
+  #status {
+    font-size: 1.1rem;
+    margin-bottom: 16px;
+    height: 28px;
+    color: #ccc;
+  }
+
+  #status .stone-icon {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    vertical-align: middle;
+    margin-right: 4px;
+  }
+
+  .black-icon { background: #222; border: 2px solid #888; }
+  .white-icon { background: #f5f5f5; border: 2px solid #888; }
+
+  #board-wrap {
+    background: #c8962e;
+    border-radius: 6px;
+    padding: 20px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  }
+
+  canvas {
+    display: block;
+    cursor: crosshair;
+  }
+
+  #controls {
+    margin-top: 18px;
+    display: flex;
+    gap: 12px;
+  }
+
+  button {
+    padding: 10px 24px;
+    border: none;
+    border-radius: 6px;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.1s;
+  }
+
+  button:active { transform: scale(0.97); }
+
+  #btn-restart {
+    background: #e2c97e;
+    color: #1a1a2e;
+    font-weight: bold;
+  }
+
+  #btn-restart:hover { background: #f0db9a; }
+
+  #btn-undo {
+    background: #2e4a6e;
+    color: #eee;
+  }
+
+  #btn-undo:hover { background: #3a5c8a; }
+
+  #mode-select {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+
+  .mode-btn {
+    padding: 8px 20px;
+    border-radius: 20px;
+    border: 2px solid #e2c97e;
+    background: transparent;
+    color: #e2c97e;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+  }
+
+  .mode-btn.active {
+    background: #e2c97e;
+    color: #1a1a2e;
+    font-weight: bold;
+  }
+
+  .mode-btn:hover:not(.active) { background: rgba(226,201,126,0.15); }
+</style>
+</head>
+<body>
+
+<h1>GOMOKU</h1>
+
+<div id="mode-select">
+  <button class="mode-btn active" data-mode="2p">2 Players</button>
+  <button class="mode-btn" data-mode="ai-easy">vs AI (Easy)</button>
+  <button class="mode-btn" data-mode="ai-hard">vs AI (Hard)</button>
+</div>
+
+<div id="status"></div>
+
+<div id="board-wrap">
+  <canvas id="board"></canvas>
+</div>
+
+<div id="controls">
+  <button id="btn-undo">Undo</button>
+  <button id="btn-restart">New Game</button>
+</div>
+
+<script>
+const BOARD_SIZE = 15;
+const CELL = 40;
+const PADDING = 30;
+const CANVAS_SIZE = CELL * (BOARD_SIZE - 1) + PADDING * 2;
+
+const canvas = document.getElementById('board');
+canvas.width = CANVAS_SIZE;
+canvas.height = CANVAS_SIZE;
+const ctx = canvas.getContext('2d');
+
+let board, turn, gameOver, history, mode;
+
+function init() {
+  board = Array.from({length: BOARD_SIZE}, () => Array(BOARD_SIZE).fill(0));
+  turn = 1; // 1 = black, 2 = white
+  gameOver = false;
+  history = [];
+  draw();
+  updateStatus();
+  // If AI goes first as black (won't happen since player is always black)
+}
+
+function colToX(c) { return PADDING + c * CELL; }
+function rowToY(r) { return PADDING + r * CELL; }
+
+function draw() {
+  ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+
+  // Grid lines
+  ctx.strokeStyle = '#8b6914';
+  ctx.lineWidth = 1;
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    ctx.beginPath();
+    ctx.moveTo(colToX(0), rowToY(i));
+    ctx.lineTo(colToX(BOARD_SIZE - 1), rowToY(i));
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(colToX(i), rowToY(0));
+    ctx.lineTo(colToX(i), rowToY(BOARD_SIZE - 1));
+    ctx.stroke();
+  }
+
+  // Star points
+  const stars = [3, 7, 11];
+  ctx.fillStyle = '#7a5a10';
+  for (const r of stars) for (const c of stars) {
+    ctx.beginPath();
+    ctx.arc(colToX(c), rowToY(r), 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Stones
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      if (board[r][c]) drawStone(r, c, board[r][c]);
+    }
+  }
+}
+
+function drawStone(r, c, player, alpha = 1) {
+  const x = colToX(c), y = rowToY(r);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.beginPath();
+  ctx.arc(x, y, CELL * 0.44, 0, Math.PI * 2);
+
+  if (player === 1) {
+    const grad = ctx.createRadialGradient(x - 5, y - 5, 2, x, y, CELL * 0.44);
+    grad.addColorStop(0, '#666');
+    grad.addColorStop(1, '#111');
+    ctx.fillStyle = grad;
+  } else {
+    const grad = ctx.createRadialGradient(x - 5, y - 5, 2, x, y, CELL * 0.44);
+    grad.addColorStop(0, '#fff');
+    grad.addColorStop(1, '#ccc');
+    ctx.fillStyle = grad;
+  }
+
+  ctx.shadowColor = 'rgba(0,0,0,0.4)';
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetX = 2;
+  ctx.shadowOffsetY = 2;
+  ctx.fill();
+  ctx.restore();
+
+  // Mark last move
+  const last = history[history.length - 1];
+  if (last && last.r === r && last.c === c) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = player === 1 ? 'rgba(255,200,0,0.85)' : 'rgba(100,0,0,0.7)';
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function highlightWin(cells) {
+  ctx.save();
+  ctx.strokeStyle = '#ff4444';
+  ctx.lineWidth = 3;
+  ctx.shadowColor = '#ff0000';
+  ctx.shadowBlur = 10;
+  for (const {r, c} of cells) {
+    ctx.beginPath();
+    ctx.arc(colToX(c), rowToY(r), CELL * 0.44, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function updateStatus(winCells) {
+  const el = document.getElementById('status');
+  if (winCells) {
+    const color = turn === 1 ? 'Black' : 'White';
+    const icon = `<span class="stone-icon ${turn===1?'black':'white'}-icon"></span>`;
+    el.innerHTML = `${icon} <strong>${color} wins!</strong> Click "New Game" to play again.`;
+    return;
+  }
+  if (gameOver) return;
+  const color = turn === 1 ? 'Black' : 'White';
+  const iconClass = turn === 1 ? 'black-icon' : 'white-icon';
+  el.innerHTML = `<span class="stone-icon ${iconClass}"></span> ${color}'s turn`;
+}
+
+function getCoord(evt) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const px = (evt.clientX - rect.left) * scaleX;
+  const py = (evt.clientY - rect.top) * scaleY;
+  const c = Math.round((px - PADDING) / CELL);
+  const r = Math.round((py - PADDING) / CELL);
+  return {r, c};
+}
+
+function inBounds(r, c) { return r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE; }
+
+function checkWin(r, c, player) {
+  const dirs = [[0,1],[1,0],[1,1],[1,-1]];
+  for (const [dr, dc] of dirs) {
+    const cells = [{r, c}];
+    for (let d = 1; d < 5; d++) {
+      const nr = r + dr*d, nc = c + dc*d;
+      if (inBounds(nr, nc) && board[nr][nc] === player) cells.push({r:nr, c:nc});
+      else break;
+    }
+    for (let d = 1; d < 5; d++) {
+      const nr = r - dr*d, nc = c - dc*d;
+      if (inBounds(nr, nc) && board[nr][nc] === player) cells.push({r:nr, c:nc});
+      else break;
+    }
+    if (cells.length >= 5) return cells;
+  }
+  return null;
+}
+
+function placeStone(r, c) {
+  if (!inBounds(r, c) || board[r][c] || gameOver) return false;
+  board[r][c] = turn;
+  history.push({r, c, player: turn});
+  draw();
+  const win = checkWin(r, c, turn);
+  if (win) {
+    gameOver = true;
+    highlightWin(win);
+    updateStatus(win);
+    return true;
+  }
+  turn = turn === 1 ? 2 : 1;
+  updateStatus();
+  return true;
+}
+
+// ---- AI ----
+
+function scoreDir(r, c, dr, dc, player) {
+  let count = 1, open = 0;
+  for (let d = 1; d < 5; d++) {
+    const nr = r+dr*d, nc = c+dc*d;
+    if (!inBounds(nr,nc)) break;
+    if (board[nr][nc] === player) count++;
+    else { if (board[nr][nc] === 0) open++; break; }
+  }
+  for (let d = 1; d < 5; d++) {
+    const nr = r-dr*d, nc = c-dc*d;
+    if (!inBounds(nr,nc)) break;
+    if (board[nr][nc] === player) count++;
+    else { if (board[nr][nc] === 0) open++; break; }
+  }
+  return {count, open};
+}
+
+function evalCell(r, c, player) {
+  if (board[r][c] !== 0) return -Infinity;
+  const dirs = [[0,1],[1,0],[1,1],[1,-1]];
+  let score = 0;
+  for (const [dr, dc] of dirs) {
+    const {count, open} = scoreDir(r, c, dr, dc, player);
+    if (count >= 5) score += 1000000;
+    else if (count === 4 && open >= 1) score += 10000;
+    else if (count === 4) score += 1000;
+    else if (count === 3 && open === 2) score += 1000;
+    else if (count === 3 && open === 1) score += 100;
+    else if (count === 2 && open === 2) score += 50;
+    else if (count === 2) score += 10;
+    else if (count === 1 && open > 0) score += 2;
+  }
+  return score;
+}
+
+function aiMove(hard) {
+  const opponent = turn === 1 ? 2 : 1;
+  let best = null, bestScore = -Infinity;
+
+  // Collect candidate cells near existing stones
+  const candidates = new Set();
+  const range = hard ? 3 : 2;
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      if (board[r][c] !== 0) {
+        for (let dr = -range; dr <= range; dr++) {
+          for (let dc = -range; dc <= range; dc++) {
+            const nr = r+dr, nc = c+dc;
+            if (inBounds(nr,nc) && board[nr][nc] === 0) {
+              candidates.add(nr * BOARD_SIZE + nc);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // First move: center
+  if (history.length === 0 || candidates.size === 0) {
+    placeStone(7, 7);
+    return;
+  }
+
+  for (const key of candidates) {
+    const r = Math.floor(key / BOARD_SIZE), c = key % BOARD_SIZE;
+    const atkScore = evalCell(r, c, turn);
+    const defScore = evalCell(r, c, opponent);
+    let score = atkScore + (hard ? 0.95 : 0.8) * defScore;
+    if (hard) score += Math.random() * 5;
+    else score += Math.random() * 30;
+
+    if (score > bestScore) { bestScore = score; best = {r, c}; }
+  }
+
+  if (best) placeStone(best.r, best.c);
+}
+
+// ---- Events ----
+
+canvas.addEventListener('click', evt => {
+  if (gameOver) return;
+  if (mode !== '2p' && turn === 2) return; // AI's turn
+  const {r, c} = getCoord(evt);
+  if (!inBounds(r, c)) return;
+  if (placeStone(r, c) && !gameOver && mode !== '2p') {
+    setTimeout(() => aiMove(mode === 'ai-hard'), 150);
+  }
+});
+
+canvas.addEventListener('mousemove', evt => {
+  if (gameOver) return;
+  if (mode !== '2p' && turn === 2) return;
+  const {r, c} = getCoord(evt);
+  draw();
+  if (inBounds(r, c) && board[r][c] === 0) {
+    drawStone(r, c, turn, 0.35);
+  }
+});
+
+canvas.addEventListener('mouseleave', () => draw());
+
+document.getElementById('btn-restart').addEventListener('click', () => {
+  init();
+});
+
+document.getElementById('btn-undo').addEventListener('click', () => {
+  if (gameOver) { gameOver = false; }
+  if (mode !== '2p' && history.length >= 2) {
+    history.pop(); history.pop();
+    const last1 = history[history.length - 1];
+    board = Array.from({length: BOARD_SIZE}, () => Array(BOARD_SIZE).fill(0));
+    for (const h of history) board[h.r][h.c] = h.player;
+    turn = 1;
+    draw();
+    updateStatus();
+  } else if (mode === '2p' && history.length >= 1) {
+    const last = history.pop();
+    board[last.r][last.c] = 0;
+    turn = last.player;
+    draw();
+    updateStatus();
+  }
+});
+
+document.querySelectorAll('.mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    mode = btn.dataset.mode;
+    init();
+  });
+});
+
+// Start
+mode = '2p';
+init();
+</script>
+</body>
+</html>
